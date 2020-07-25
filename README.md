@@ -14,6 +14,36 @@ AliyunOSS_XXS
 ### 使用方法
 /build/*
 项目编译好的DLL
+```
+AliyunOssConfig aliyunOSSConfig = new AliyunOssConfig()
+            {
+                Endpoint = "oss-cn-beijing.aliyuncs.com",
+                AccessKeyId = "000",
+                AccessKeySecret = "0000",
+                BucketName = "my-xxscloud",
+            };
+
+
+
+            var task = new OssTask(aliyunOSSConfig, (t, s, p) =>
+            {
+                Console.WriteLine("任务：" + t.Id + ", 速度" + (s / 1024) + "KB 进度：" + p);
+            }, (t) =>
+            {
+                Console.WriteLine("任务：" + t.Id + " -- 完成");
+            });
+
+            //添加上传任务
+            //var item = task.AddUploadTask("", @"D:\src.zip");
+
+            //添加下载任务
+            var item = task.AddDownloadTask("", "src.zip", @"D:\src222222.zip");
+
+            //开始任务
+            task.StartTask(task.GetTaskList()[0].Id);
+
+            Console.ReadKey();
+```
 
 
 ### 后记
