@@ -92,7 +92,7 @@ namespace XXSAliyunOSS
                 Type = OssTaskType.DOWNLOAD,
                 Status = OssTaskStatus.WAIT,
 
-                DownloadOssPath = ossPath,
+                DownloadOssPath = ossPath == null || ossPath == "" ? "/" : ossPath,
                 DownloadOssName = ossName,
 
                 DownloadName = Path.GetFileName(downloadPath),
@@ -126,7 +126,7 @@ namespace XXSAliyunOSS
                 Type = OssTaskType.UPLOAD,
                 Status = OssTaskStatus.WAIT,
 
-                UploadOssPath = ossPath,
+                UploadOssPath = ossPath == null || ossPath == "" ? "/" : ossPath,
                 UploadOssName = name,
 
                 UploadName = name,
@@ -357,8 +357,7 @@ namespace XXSAliyunOSS
                 }
 
                 //读取线上文件信息
-                var ossPath = task.DownloadOssPath + @"\" + task.DownloadOssName;
-                ossPath = ossPath.Substring(1);
+                var ossPath = CheckOssPath(task.DownloadOssPath + @"\" + task.DownloadOssName);
                 var fileInfo = client.GetObject(aliyunOSSConfig.BucketName, ossPath);
                 task.DownloadFileLength = fileInfo.ContentLength;
                 fileInfo.Dispose();
@@ -386,7 +385,7 @@ namespace XXSAliyunOSS
                 task.Stream = new FileStream(task.DownloadPath + @"\" + task.DownloadName + ".download", FileMode.Open);
             }
 
-           
+
 
             //创建碎片任务说明
             task.DebrisProgress = new Boolean?[task.DownloadDebrisTotalCount];
@@ -465,8 +464,7 @@ namespace XXSAliyunOSS
             try
             {
                 //阿里云下载
-                var ossPath = task.DownloadOssPath + @"\" + task.DownloadOssName;
-                ossPath = ossPath.Substring(1);
+                var ossPath = CheckOssPath(task.DownloadOssPath + @"\" + task.DownloadOssName);
                 GetObjectRequest request = new GetObjectRequest(aliyunOSSConfig.BucketName, ossPath);
 
                 request.SetRange(p * task.DebrisSize,
@@ -574,8 +572,7 @@ namespace XXSAliyunOSS
             //先上阿里云OSS进行上传初始化
             if (task.UploadOssId == null)
             {
-                var ossPath = task.UploadOssPath + @"/" + task.UploadOssName;
-                ossPath = ossPath.Substring(1);
+                var ossPath = CheckOssPath(task.UploadOssPath + @"/" + task.UploadOssName);
                 var request = new InitiateMultipartUploadRequest(aliyunOSSConfig.BucketName, ossPath);
                 var result = client.InitiateMultipartUpload(request);
                 task.UploadOssId = result.UploadId;
@@ -681,8 +678,7 @@ namespace XXSAliyunOSS
                 byte[] data = (byte[])p[1];
 
                 //生成文件
-                var ossPath = task.UploadOssPath + @"/" + task.UploadOssName;
-                ossPath = ossPath.Substring(1);
+                var ossPath = CheckOssPath(task.UploadOssPath + @"/" + task.UploadOssName);
                 var request = new UploadPartRequest(aliyunOSSConfig.BucketName, ossPath, task.UploadOssId)
                 {
                     InputStream = new MemoryStream(data),
@@ -748,8 +744,7 @@ namespace XXSAliyunOSS
         private void UploadComplete(OssTaskDO task)
         {
             //线上检查
-            var ossPath = task.UploadOssPath + @"/" + task.UploadOssName;
-            ossPath = ossPath.Substring(1);
+            var ossPath = CheckOssPath(task.UploadOssPath + @"/" + task.UploadOssName);
             var listPartsRequest = new ListPartsRequest(aliyunOSSConfig.BucketName, ossPath, task.UploadOssId);
             var listPartsResult = client.ListParts(listPartsRequest);
 
@@ -834,6 +829,16 @@ namespace XXSAliyunOSS
             {
                 File.WriteAllText(Environment.CurrentDirectory + @"\ossTask.json", JsonConvert.SerializeObject(taskList));
             }
+        }
+
+        private static string CheckOssPath(string path)
+        {
+            path = path.Replace(@"\", @"/").Replace(@"//", "/");
+            if (path.StartsWith("/"))
+            {
+                return path.Substring(1);
+            }
+            return path;
         }
     }
 }
