@@ -96,7 +96,7 @@ namespace XXSAliyunOSS
                 DownloadOssName = ossName,
 
                 DownloadName = Path.GetFileName(downloadPath),
-                DownloadPath = Path.GetDirectoryName(downloadPath)
+                DownloadPath = Path.GetDirectoryName(downloadPath),
             };
             taskList.Add(task);
             SaveOssTaskConfig(taskList);
@@ -130,7 +130,7 @@ namespace XXSAliyunOSS
                 UploadOssName = name,
 
                 UploadName = name,
-                UploadPath = Path.GetDirectoryName(uploadPath)
+                UploadPath = Path.GetDirectoryName(uploadPath),
             };
             taskList.Add(task);
             SaveOssTaskConfig(taskList);
@@ -302,6 +302,7 @@ namespace XXSAliyunOSS
                                     tokenSource = null;
                                     return;
                                 }
+                                //循环递归
                                 this.taskList.ForEach(it =>
                                 {
                                     if (it.Status == OssTaskStatus.RUN)
@@ -309,6 +310,8 @@ namespace XXSAliyunOSS
                                         RefreshTaskItem(it);
                                     }
                                 });
+                                //保存配置
+                                SaveOssTaskConfig(this.taskList);
                                 Thread.Sleep(1000);
                             }
                             catch (Exception e)
@@ -335,7 +338,8 @@ namespace XXSAliyunOSS
             //委托调用
             if (task.LastProgress > 0 && taskProgressChangeCallback != null)
             {
-                taskProgressChangeCallback(task, speed, Math.Round(progress, 2) * 100);
+                task.ActualProgress = (long)(Math.Round(progress, 2) * 100);
+                taskProgressChangeCallback(task, speed, task.ActualProgress);
             }
         }
 
@@ -361,6 +365,16 @@ namespace XXSAliyunOSS
                 var fileInfo = client.GetObject(aliyunOSSConfig.BucketName, ossPath);
                 task.DownloadFileLength = fileInfo.ContentLength;
                 fileInfo.Dispose();
+
+                //智能分配碎片
+                if (task.DebrisSize <= 0)
+                {
+                    task.DebrisSize = task.DownloadFileLength % 9999 == 0 ? task.DownloadFileLength / 9999 : task.DownloadFileLength / 9999 + 100;
+                    if (task.DebrisSize < task.MinDebrisSize)
+                    {
+                        task.DebrisSize = task.MinDebrisSize;
+                    }
+                }
 
                 //磁盘创建一个一样大小空文件
                 var fs = new FileStream(task.DownloadPath + @"\" + task.DownloadName + ".download", FileMode.Create);
@@ -550,13 +564,22 @@ namespace XXSAliyunOSS
         {
             //保存配置
             task.Status = OssTaskStatus.COMPLETE;
+            task.ActualProgress = 100;
             SaveOssTaskConfig(taskList);
 
             //回收内存
             this.Close(task);
 
-            //重命名
-            File.Move(task.DownloadPath + @"\" + task.DownloadName + ".download", task.DownloadPath + @"\" + task.DownloadName);
+            //重命名, 如果存在文件就加Guid
+            if (!File.Exists(task.DownloadPath + @"\" + task.DownloadName))
+            {
+                File.Move(task.DownloadPath + @"\" + task.DownloadName + ".download", task.DownloadPath + @"\" + task.DownloadName);
+            }
+            else
+            {
+                var flag = task.DownloadPath + @"\" + Path.GetFileNameWithoutExtension(task.DownloadName) + Guid.NewGuid().ToString() + Path.GetExtension(task.DownloadName);
+                File.Move(task.DownloadPath + @"\" + task.DownloadName + ".download", flag);
+            }
 
 
             //执行回执
@@ -580,6 +603,7 @@ namespace XXSAliyunOSS
 
             //打开文件流
             task.Stream = new FileStream(task.UploadPath + @"\" + task.UploadName, FileMode.Open);
+            var fileLength = task.Stream.Length;
             var fileStream = new FileStream(task.UploadPath + @"\" + task.UploadName + ".upload", FileMode.OpenOrCreate);
             //在相同上传文件目录生成一个隐藏配置文件
             task.ConfigStream = new StreamWriter(fileStream);
@@ -602,8 +626,18 @@ namespace XXSAliyunOSS
             }
 
 
+            //智能分配碎片
+            if (task.DebrisSize <= 0)
+            {
+                task.DebrisSize = fileLength % 9999 == 0 ? fileLength / 9999 : fileLength / 9999 + 100;
+                if (task.DebrisSize < task.MinDebrisSize)
+                {
+                    task.DebrisSize = task.MinDebrisSize;
+                }
+            }
+
             //计算碎片总数和进度
-            var debrisTotal = task.Stream.Length % task.DebrisSize == 0 ? task.Stream.Length / task.DebrisSize : task.Stream.Length / task.DebrisSize + 1;
+            var debrisTotal = fileLength % task.DebrisSize == 0 ? fileLength / task.DebrisSize : fileLength / task.DebrisSize + 1;
             var debrisProgress = new bool?[debrisTotal];
             for (int i = 0; i < debrisProgress.Length; i++)
             {
@@ -766,6 +800,7 @@ namespace XXSAliyunOSS
 
             //保存配置
             task.Status = OssTaskStatus.COMPLETE;
+            task.ActualProgress = 100;
             SaveOssTaskConfig(taskList);
 
             //回收内存

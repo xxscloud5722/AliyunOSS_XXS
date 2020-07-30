@@ -88,7 +88,11 @@ namespace XXSAliyunOSS
         public bool?[] DebrisProgress { set; get; }
 
         //文件的碎片大小
-        public long DebrisSize { get { return 1024 * 100; } }
+        public long DebrisSize { get; set; }
+
+        //最小的碎片
+        [JsonIgnore]
+        public long MinDebrisSize { get { return 1024 * 100; } }
 
         //上次已处理的长度
         [JsonIgnore]
@@ -101,6 +105,9 @@ namespace XXSAliyunOSS
         //总长度
         [JsonIgnore]
         public long TotalProgress { set; get; }
+
+        //UI显示的进度
+        public long ActualProgress { set; get; }
     }
 
     public enum OssTaskType
