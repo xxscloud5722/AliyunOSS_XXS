@@ -26,7 +26,7 @@ namespace XXSAliyunOSS
         //线程数量
         private readonly int threadCount = 5;
 
-        //ref
+        //刷新进度的线程
         CancellationTokenSource tokenSource = null;
 
         public delegate void TaskProgressChangeCallback(OssTaskDO ossTasks, long speed, double progress);
@@ -562,6 +562,12 @@ namespace XXSAliyunOSS
 
         private void DownloadComplete(OssTaskDO task)
         {
+            //如果是暂停就跳出
+            if (task.Progress < task.TotalProgress)
+            {
+                return;
+            }
+
             //保存配置
             task.Status = OssTaskStatus.COMPLETE;
             task.ActualProgress = 100;
@@ -777,6 +783,12 @@ namespace XXSAliyunOSS
 
         private void UploadComplete(OssTaskDO task)
         {
+            //如果是暂停就跳出
+            if (task.Progress < task.TotalProgress)
+            {
+                return;
+            }
+
             //线上检查
             var ossPath = CheckOssPath(task.UploadOssPath + @"/" + task.UploadOssName);
             var listPartsRequest = new ListPartsRequest(aliyunOSSConfig.BucketName, ossPath, task.UploadOssId);
