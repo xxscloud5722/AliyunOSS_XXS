@@ -75,6 +75,10 @@ namespace XXSAliyunOSS
         [JsonIgnore]
         public List<CancellationTokenSource> ThreadTokenList { set; get; }
 
+        //线程token
+        [JsonIgnore]
+        public List<TokenStatus> ThreadTokenStatusList { set; get; }
+
         //文件流
         [JsonIgnore]
         public FileStream Stream { set; get; }
@@ -122,5 +126,10 @@ namespace XXSAliyunOSS
         RUN,
         DELETE,
         COMPLETE
+    }
+    public class TokenStatus
+    {
+        public CancellationTokenSource Token { set; get; }
+        public bool Status { set; get; }
     }
 }

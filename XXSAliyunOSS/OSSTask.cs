@@ -159,28 +159,43 @@ namespace XXSAliyunOSS
             {
                 return false;
             }
-            if (item.Status == OssTaskStatus.DELETE)
+            lock (item)
             {
-                return false;
-            }
-            if (item.Status == OssTaskStatus.RUN)
-            {
-                return true;
-            }
-            if (item.Status == OssTaskStatus.COMPLETE)
-            {
-                return true;
-            }
+                if (item.Status == OssTaskStatus.DELETE)
+                {
+                    return false;
+                }
+                if (item.Status == OssTaskStatus.RUN)
+                {
+                    return true;
+                }
+                if (item.Status == OssTaskStatus.COMPLETE)
+                {
+                    return true;
+                }
+                //判断任务是否正忙
+                if (item.ThreadTokenList != null)
+                {
+                    var runStatus = item.ThreadList.Find(it =>
+                    {
+                        return it.Status == TaskStatus.Running;
+                    });
+                    if (runStatus != null)
+                    {
+                        throw new Exception("任务忙，稍后再试");
+                    }
+                }
 
-            //待运行状态, 如果是下载任务
-            item.Status = OssTaskStatus.RUN;
-            if (item.Type == OssTaskType.DOWNLOAD)
-            {
-                StartDownload(item);
-            }
-            else if (item.Type == OssTaskType.UPLOAD)
-            {
-                StartUpload(item);
+                //待运行状态, 如果是下载任务
+                item.Status = OssTaskStatus.RUN;
+                if (item.Type == OssTaskType.DOWNLOAD)
+                {
+                    StartDownload(item);
+                }
+                else if (item.Type == OssTaskType.UPLOAD)
+                {
+                    StartUpload(item);
+                }
             }
             SaveOssTaskConfig(taskList);
             return true;
@@ -214,11 +229,11 @@ namespace XXSAliyunOSS
                 {
                     StopUpload(item);
                 }
-                this.taskList.Remove(item);
-                SaveOssTaskConfig(taskList);
-                return true;
             }
-            //如果是待运行状态
+
+            //Delete
+            item.Status = OssTaskStatus.DELETE;
+            this.Close(item);
             this.taskList.Remove(item);
             SaveOssTaskConfig(taskList);
             return true;
@@ -399,24 +414,53 @@ namespace XXSAliyunOSS
                 task.Stream = new FileStream(task.DownloadPath + @"\" + task.DownloadName + ".download", FileMode.Open);
             }
 
+            //存放Etag 读取Tag
+            task.UploadETag = new List<string>();
+            var fileStream = new FileStream(task.DownloadPath + @"\" + task.DownloadName + ".download.config", FileMode.OpenOrCreate);
+            fileStream.Position = 0;
+            using (var readStream = new StreamReader(fileStream))
+            {
+                while (true)
+                {
+                    var row = readStream.ReadLine();
+                    if (row == null)
+                    {
+                        break;
+                    }
+
+                    var values = row.Split(',');
+                    var id = values[0];
+                    var index = task.UploadETag.FindIndex(r => r.Split(',')[0] == id);
+                    if (values.Length == 2 && index == -1)
+                    {
+                        task.UploadETag.Add(row);
+                    }
+                    else
+                    {
+                        Console.WriteLine("Read Tag: " + row + ", index:" + index);
+                    }
+                }
+            }
+            Console.WriteLine("Tag: " + task.UploadETag.Count);
+
+            //在相同下载文件目录生成一个隐藏配置文件
+            fileStream = new FileStream(task.DownloadPath + @"\" + task.DownloadName + ".download.config", FileMode.OpenOrCreate);
+            fileStream.Position = fileStream.Length;
+            task.ConfigStream = new StreamWriter(fileStream);
+            task.ConfigStream.AutoFlush = false;
 
 
-            //创建碎片任务说明
-            task.DebrisProgress = new Boolean?[task.DownloadDebrisTotalCount];
+            //创建碎片任务
+            task.DebrisProgress = new bool?[task.DownloadDebrisTotalCount];
             for (int i = 0; i < task.DownloadDebrisTotalCount; i++)
             {
-                task.Stream.Position = i * task.DebrisSize;
-                var temp = new byte[task.DebrisSize];
-                task.Stream.ReadAsync(temp, 0, (int)task.DebrisSize);
-
-                //查询内存块
-                var result = temp.ToList().FindIndex(r => r > 0);
-                task.DebrisProgress[i] = result >= 0;
+                var index = task.UploadETag.FindIndex(r => r.Split(',')[0] == i.ToString());
+                task.DebrisProgress[i] = index >= 0;
             }
-
+            Console.WriteLine("Tag:" + task.UploadETag.Count);
 
             //总长度
-            task.Progress = task.DebrisProgress.ToList().Where(r => r == true).ToList().Count * task.DebrisSize;
+            task.Progress = task.UploadETag.Count * task.DebrisSize;
             task.TotalProgress = task.DownloadFileLength;
 
             //保存配置
@@ -425,6 +469,7 @@ namespace XXSAliyunOSS
             //开启线程下载文件
             task.ThreadList = new List<Task>();
             task.ThreadTokenList = new List<CancellationTokenSource>();
+            task.ThreadTokenStatusList = new List<TokenStatus>();
             for (int i = 0; i < threadCount; i++)
             {
                 var token = new CancellationTokenSource();
@@ -434,7 +479,12 @@ namespace XXSAliyunOSS
                     {
                         try
                         {
-                            if (token.IsCancellationRequested)
+                            if (task.ThreadTokenStatusList == null)
+                            {
+                                return;
+                            }
+                            var taskStatus = task.ThreadTokenStatusList.Find(it => it.Token == token);
+                            if (taskStatus.Status)
                             {
                                 return;
                             }
@@ -442,7 +492,7 @@ namespace XXSAliyunOSS
                             {
                                 return;
                             }
-                            if (token.IsCancellationRequested)
+                            if (taskStatus.Status)
                             {
                                 return;
                             }
@@ -453,6 +503,12 @@ namespace XXSAliyunOSS
                         }
                     }
                 }, token.Token));
+                task.ThreadTokenList.Add(token);
+                task.ThreadTokenStatusList.Add(new TokenStatus
+                {
+                    Token = token,
+                    Status = false
+                });
             }
 
 
@@ -532,8 +588,13 @@ namespace XXSAliyunOSS
             //保存到文件
             lock (task.Stream)
             {
+                task.Stream.Flush();
                 task.Stream.Position = i * task.DebrisSize;
+                task.Stream.Flush();
                 task.Stream.Write(bytes, 0, bytes.Length);
+                task.Stream.Flush();
+                task.ConfigStream.WriteLine(i + "," + Guid.NewGuid().ToString());
+                task.ConfigStream.Flush();
                 task.Progress += bytes.Length;
             }
         }
@@ -543,19 +604,22 @@ namespace XXSAliyunOSS
             lock (task)
             {
                 Console.WriteLine("回滚任务:" + i);
-                task.DebrisProgress[i] = false;
+                if (task != null && task.DebrisProgress != null && task.DebrisProgress.Length > i)
+                {
+                    task.DebrisProgress[i] = false;
+                }
             }
         }
 
         private void StopDownload(OssTaskDO task)
         {
-            if (task.ThreadTokenList == null)
+            if (task.ThreadTokenList == null || task.ThreadTokenStatusList == null)
             {
                 return;
             }
-            task.ThreadTokenList.ForEach(it =>
+            task.ThreadTokenStatusList.ForEach(it =>
             {
-                it.Cancel();
+                it.Status = true;
             });
         }
 
@@ -565,6 +629,7 @@ namespace XXSAliyunOSS
             //如果是暂停就跳出
             if (task.Progress < task.TotalProgress)
             {
+                this.Close(task);
                 return;
             }
 
@@ -610,26 +675,41 @@ namespace XXSAliyunOSS
             //打开文件流
             task.Stream = new FileStream(task.UploadPath + @"\" + task.UploadName, FileMode.Open);
             var fileLength = task.Stream.Length;
-            var fileStream = new FileStream(task.UploadPath + @"\" + task.UploadName + ".upload", FileMode.OpenOrCreate);
-            //在相同上传文件目录生成一个隐藏配置文件
-            task.ConfigStream = new StreamWriter(fileStream);
+
             //存放Etag 读取Tag
             task.UploadETag = new List<string>();
-            var readStream = new StreamReader(fileStream);
-            while (true)
+            var fileStream = new FileStream(task.UploadPath + @"\" + task.UploadName + ".upload", FileMode.OpenOrCreate);
+            fileStream.Position = 0;
+            using (var readStream = new StreamReader(fileStream))
             {
-                var row = readStream.ReadLine();
-                if (row == null)
+                while (true)
                 {
-                    break;
-                }
+                    var row = readStream.ReadLine();
+                    if (row == null)
+                    {
+                        break;
+                    }
 
-                var values = row.Split(',');
-                if (values.Length == 4)
-                {
-                    task.UploadETag.Add(row);
+                    var values = row.Split(',');
+                    var id = values[0];
+                    var index = task.UploadETag.FindIndex(r => r.Split(',')[0] == id);
+                    if (values.Length == 4 && index == -1)
+                    {
+                        task.UploadETag.Add(row);
+                    }
+                    else
+                    {
+                        Console.WriteLine("Read Tag: " + row + ", index:" + index);
+                    }
                 }
             }
+            Console.WriteLine("Tag: " + task.UploadETag.Count);
+
+            //在相同上传文件目录生成一个隐藏配置文件
+            fileStream = new FileStream(task.UploadPath + @"\" + task.UploadName + ".upload", FileMode.OpenOrCreate);
+            fileStream.Position = fileStream.Length;
+            task.ConfigStream = new StreamWriter(fileStream);
+            task.ConfigStream.AutoFlush = false;
 
 
             //智能分配碎片
@@ -662,6 +742,7 @@ namespace XXSAliyunOSS
             //开始任务
             task.ThreadList = new List<Task>();
             task.ThreadTokenList = new List<CancellationTokenSource>();
+            task.ThreadTokenStatusList = new List<TokenStatus>();
             for (int i = 0; i < threadCount; i++)
             {
                 var token = new CancellationTokenSource();
@@ -671,7 +752,12 @@ namespace XXSAliyunOSS
                     {
                         try
                         {
-                            if (token.IsCancellationRequested)
+                            if (task.ThreadTokenStatusList == null)
+                            {
+                                return;
+                            }
+                            var taskStatus = task.ThreadTokenStatusList.Find(it => it.Token == token);
+                            if (taskStatus.Status)
                             {
                                 return;
                             }
@@ -679,7 +765,7 @@ namespace XXSAliyunOSS
                             {
                                 return;
                             }
-                            if (token.IsCancellationRequested)
+                            if (taskStatus.Status)
                             {
                                 return;
                             }
@@ -690,6 +776,12 @@ namespace XXSAliyunOSS
                         }
                     }
                 }, token.Token));
+                task.ThreadTokenList.Add(token);
+                task.ThreadTokenStatusList.Add(new TokenStatus()
+                {
+                    Token = token,
+                    Status = false
+                });
             }
 
             //等待任务完成结束
@@ -740,6 +832,7 @@ namespace XXSAliyunOSS
                     task.UploadETag.Add(resultRow);
                     task.Progress += data.Length;
                     task.ConfigStream.WriteLine(resultRow);
+                    task.ConfigStream.Flush();
                 }
             }
             catch (Exception ex)
@@ -777,7 +870,10 @@ namespace XXSAliyunOSS
             lock (task)
             {
                 Console.WriteLine("回滚任务:" + i);
-                task.DebrisProgress[i] = false;
+                if (task != null && task.DebrisProgress != null && task.DebrisProgress.Length > i)
+                {
+                    task.DebrisProgress[i] = false;
+                }
             }
         }
 
@@ -786,6 +882,7 @@ namespace XXSAliyunOSS
             //如果是暂停就跳出
             if (task.Progress < task.TotalProgress)
             {
+                this.Close(task);
                 return;
             }
 
@@ -825,36 +922,47 @@ namespace XXSAliyunOSS
 
         private void StopUpload(OssTaskDO task)
         {
-            if (task.ThreadTokenList == null)
+            if (task.ThreadTokenList == null || task.ThreadTokenStatusList == null)
             {
                 return;
             }
-            task.ThreadTokenList.ForEach(it =>
+            task.ThreadTokenStatusList.ForEach(it =>
             {
-                it.Cancel();
+                it.Status = true;
             });
-            this.Close(task);
         }
 
 
         private void Close(OssTaskDO task)
         {
-            //回收内存
-            task.ThreadTokenList = null;
-            task.ThreadList = null;
-            task.DebrisProgress = null;
+            lock (task)
+            {
+                //回收内存
+                task.ThreadTokenList = null;
+                task.ThreadList = null;
+                task.ThreadTokenStatusList = null;
+                task.DebrisProgress = null;
 
-            if (task.Stream != null)
-            {
-                task.Stream.Close();
-            }
-            if (task.ConfigStream != null)
-            {
-                task.ConfigStream.Close();
-            }
-            if (File.Exists(task.UploadPath + @"/" + task.UploadName + ".upload"))
-            {
-                File.Delete(task.UploadPath + @"/" + task.UploadName + ".upload");
+                if (task.Stream != null)
+                {
+                    task.Stream.Close();
+                }
+                if (task.ConfigStream != null)
+                {
+                    task.ConfigStream.Close();
+                }
+                if (task.Status != OssTaskStatus.WAIT && task.Status != OssTaskStatus.RUN && File.Exists(task.UploadPath + @"/" + task.UploadName + ".upload"))
+                {
+                    File.Delete(task.UploadPath + @"/" + task.UploadName + ".upload");
+                }
+                if (task.Status != OssTaskStatus.WAIT && task.Status != OssTaskStatus.RUN && File.Exists(task.DownloadPath + @"/" + task.DownloadName + ".download"))
+                {
+                    File.Delete(task.DownloadPath + @"/" + task.DownloadName + ".download");
+                }
+                if (task.Status != OssTaskStatus.WAIT && task.Status != OssTaskStatus.RUN && File.Exists(task.DownloadPath + @"/" + task.DownloadName + ".download.config"))
+                {
+                    File.Delete(task.DownloadPath + @"/" + task.DownloadName + ".download.config");
+                }
             }
         }
 
