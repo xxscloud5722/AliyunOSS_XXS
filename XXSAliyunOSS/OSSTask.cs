@@ -4,8 +4,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net.Http.Headers;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -221,6 +219,8 @@ namespace XXSAliyunOSS
             //如果是运行状态
             if (item.Status == OssTaskStatus.RUN)
             {
+                //状态标记删除
+                item.Status = OssTaskStatus.DELETE;
                 if (item.Type == OssTaskType.DOWNLOAD)
                 {
                     StopDownload(item);
@@ -231,9 +231,11 @@ namespace XXSAliyunOSS
                 }
             }
 
-            //Delete
-            item.Status = OssTaskStatus.DELETE;
+            //关闭内存流
             this.Close(item);
+            //清除配置文件
+            this.ClearConfig(item);
+            //任务移除
             this.taskList.Remove(item);
             SaveOssTaskConfig(taskList);
             return true;
@@ -284,7 +286,10 @@ namespace XXSAliyunOSS
             {
                 if (it.Status != OssTaskStatus.RUN)
                 {
-                    Close(it);
+                    //关闭内存流
+                    this.Close(it);
+                    //清除配置文件
+                    this.ClearConfig(it);
                 }
             });
         }
@@ -295,7 +300,9 @@ namespace XXSAliyunOSS
 
 
 
-
+        /// <summary>
+        /// 刷新任务的线程
+        /// </summary>
         private void RefreshTask()
         {
             lock (taskList)
@@ -339,6 +346,10 @@ namespace XXSAliyunOSS
             }
         }
 
+        /// <summary>
+        /// 刷新任务线程的执行类
+        /// </summary>
+        /// <param name="task"></param>
         private void RefreshTaskItem(OssTaskDO task)
         {
             //速度
@@ -360,6 +371,10 @@ namespace XXSAliyunOSS
 
 
 
+        /// <summary>
+        /// 开始下载任务执行
+        /// </summary>
+        /// <param name="task"></param>
         private void StartDownload(OssTaskDO task)
         {
             //开启扫描
@@ -521,6 +536,11 @@ namespace XXSAliyunOSS
             task.ThreadList.ForEach(it => it.Start());
         }
 
+        /// <summary>
+        /// 下载任务详情
+        /// </summary>
+        /// <param name="task"></param>
+        /// <returns></returns>
         private object DownloadItem(OssTaskDO task)
         {
             //获取索引
@@ -561,6 +581,11 @@ namespace XXSAliyunOSS
             return true;
         }
 
+        /// <summary>
+        /// 读取碎片获取需要下载的碎片
+        /// </summary>
+        /// <param name="task"></param>
+        /// <returns></returns>
         private int DownloadReadAsync(OssTaskDO task)
         {
             lock (task)
@@ -575,6 +600,12 @@ namespace XXSAliyunOSS
             }
         }
 
+        /// <summary>
+        /// 读取网络流并写入磁盘文件
+        /// </summary>
+        /// <param name="task"></param>
+        /// <param name="stream"></param>
+        /// <param name="i"></param>
         private void DownloadWriteAsync(OssTaskDO task, Stream stream, int i)
         {
             //获取流
@@ -599,6 +630,11 @@ namespace XXSAliyunOSS
             }
         }
 
+        /// <summary>
+        /// 如果下载任务失败进行回滚
+        /// </summary>
+        /// <param name="task"></param>
+        /// <param name="i"></param>
         private void DownloadWriteReduction(OssTaskDO task, int i)
         {
             lock (task)
@@ -611,6 +647,10 @@ namespace XXSAliyunOSS
             }
         }
 
+        /// <summary>
+        /// 停止任务
+        /// </summary>
+        /// <param name="task"></param>
         private void StopDownload(OssTaskDO task)
         {
             if (task.ThreadTokenList == null || task.ThreadTokenStatusList == null)
@@ -624,12 +664,22 @@ namespace XXSAliyunOSS
         }
 
 
+        /// <summary>
+        /// 下载完成详情
+        /// </summary>
+        /// <param name="task"></param>
         private void DownloadComplete(OssTaskDO task)
         {
             //如果是暂停就跳出
-            if (task.Progress < task.TotalProgress)
+            if (task.Progress < task.TotalProgress - 1)
             {
+                //关闭内存流
                 this.Close(task);
+                //清除配置文件，只有删除状态删除配置
+                if (task.Status == OssTaskStatus.DELETE)
+                {
+                    this.ClearConfig(task);
+                }
                 return;
             }
 
@@ -652,12 +702,19 @@ namespace XXSAliyunOSS
                 File.Move(task.DownloadPath + @"\" + task.DownloadName + ".download", flag);
             }
 
+            //清除配置文件
+            this.ClearConfig(task);
+
 
             //执行回执
             downloadCompleteCallBack?.Invoke(task);
         }
 
 
+        /// <summary>
+        /// 开始上传
+        /// </summary>
+        /// <param name="task"></param>
         private void StartUpload(OssTaskDO task)
         {
             //开启扫描
@@ -794,6 +851,11 @@ namespace XXSAliyunOSS
             task.ThreadList.ForEach(it => it.Start());
         }
 
+        /// <summary>
+        /// 上传任务的详细
+        /// </summary>
+        /// <param name="task"></param>
+        /// <returns></returns>
         private object UploadItem(OssTaskDO task)
         {
             //获取索引
@@ -844,6 +906,11 @@ namespace XXSAliyunOSS
             return true;
         }
 
+        /// <summary>
+        /// 读取上传任务进度
+        /// </summary>
+        /// <param name="task"></param>
+        /// <returns>数组1:下标，2:数据</returns>
         private object[] UploadReadAsync(OssTaskDO task)
         {
             lock (task)
@@ -865,6 +932,11 @@ namespace XXSAliyunOSS
             }
         }
 
+        /// <summary>
+        /// 上传失败回滚
+        /// </summary>
+        /// <param name="task"></param>
+        /// <param name="i"></param>
         private void UploadReadReduction(OssTaskDO task, int i)
         {
             lock (task)
@@ -877,12 +949,22 @@ namespace XXSAliyunOSS
             }
         }
 
+        /// <summary>
+        /// 上传完成
+        /// </summary>
+        /// <param name="task"></param>
         private void UploadComplete(OssTaskDO task)
         {
             //如果是暂停就跳出
-            if (task.Progress < task.TotalProgress)
+            if (task.Progress < task.TotalProgress - 1)
             {
+                //关闭内存流
                 this.Close(task);
+                //清除配置文件，只有删除状态删除配置
+                if (task.Status == OssTaskStatus.DELETE)
+                {
+                    this.ClearConfig(task);
+                }
                 return;
             }
 
@@ -912,13 +994,19 @@ namespace XXSAliyunOSS
             task.ActualProgress = 100;
             SaveOssTaskConfig(taskList);
 
-            //回收内存
+            //关闭内存流
             this.Close(task);
+            //清除配置文件
+            this.ClearConfig(task);
 
             //执行回执
             downloadCompleteCallBack?.Invoke(task);
         }
 
+        /// <summary>
+        /// 停止上传
+        /// </summary>
+        /// <param name="task"></param>
 
         private void StopUpload(OssTaskDO task)
         {
@@ -933,6 +1021,10 @@ namespace XXSAliyunOSS
         }
 
 
+        /// <summary>
+        /// 关闭内存流并回收内存
+        /// </summary>
+        /// <param name="task"></param>
         private void Close(OssTaskDO task)
         {
             lock (task)
@@ -951,21 +1043,34 @@ namespace XXSAliyunOSS
                 {
                     task.ConfigStream.Close();
                 }
-                if (task.Status != OssTaskStatus.WAIT && task.Status != OssTaskStatus.RUN && File.Exists(task.UploadPath + @"/" + task.UploadName + ".upload"))
-                {
-                    File.Delete(task.UploadPath + @"/" + task.UploadName + ".upload");
-                }
-                if (task.Status != OssTaskStatus.WAIT && task.Status != OssTaskStatus.RUN && File.Exists(task.DownloadPath + @"/" + task.DownloadName + ".download"))
-                {
-                    File.Delete(task.DownloadPath + @"/" + task.DownloadName + ".download");
-                }
-                if (task.Status != OssTaskStatus.WAIT && task.Status != OssTaskStatus.RUN && File.Exists(task.DownloadPath + @"/" + task.DownloadName + ".download.config"))
-                {
-                    File.Delete(task.DownloadPath + @"/" + task.DownloadName + ".download.config");
-                }
             }
         }
 
+        /// <summary>
+        /// 清除配置文件
+        /// </summary>
+        /// <param name="task"></param>
+        private void ClearConfig(OssTaskDO task)
+        {
+            if (task.Status != OssTaskStatus.WAIT && task.Status != OssTaskStatus.RUN && File.Exists(task.UploadPath + @"/" + task.UploadName + ".upload"))
+            {
+                File.Delete(task.UploadPath + @"/" + task.UploadName + ".upload");
+            }
+            if (task.Status != OssTaskStatus.WAIT && task.Status != OssTaskStatus.RUN && File.Exists(task.DownloadPath + @"/" + task.DownloadName + ".download"))
+            {
+                File.Delete(task.DownloadPath + @"/" + task.DownloadName + ".download");
+            }
+            if (task.Status != OssTaskStatus.WAIT && task.Status != OssTaskStatus.RUN && File.Exists(task.DownloadPath + @"/" + task.DownloadName + ".download.config"))
+            {
+                File.Delete(task.DownloadPath + @"/" + task.DownloadName + ".download.config");
+            }
+        }
+
+        /// <summary>
+        /// 复制流，注意游标的处理
+        /// </summary>
+        /// <param name="input"></param>
+        /// <param name="output"></param>
         public static void CopyStream(Stream input, Stream output)
         {
             var p = output.Position;
@@ -978,6 +1083,10 @@ namespace XXSAliyunOSS
             output.Position = p;
         }
 
+        /// <summary>
+        /// 保存任务配置到磁盘
+        /// </summary>
+        /// <param name="taskList"></param>
         private static void SaveOssTaskConfig(List<OssTaskDO> taskList)
         {
             lock (taskList)
@@ -986,6 +1095,11 @@ namespace XXSAliyunOSS
             }
         }
 
+        /// <summary>
+        /// 检查阿里云OSS路径，并修复
+        /// </summary>
+        /// <param name="path"></param>
+        /// <returns></returns>
         private static string CheckOssPath(string path)
         {
             path = path.Replace(@"\", @"/").Replace(@"//", "/");
