@@ -456,6 +456,8 @@ namespace XXSAliyunOSS
                     }
                 }
             }
+            //隐藏文件
+            File.SetAttributes(task.DownloadPath + @"\" + task.DownloadName + ".download.config", FileAttributes.Hidden);
             Console.WriteLine("Tag: " + task.UploadETag.Count);
 
             //在相同下载文件目录生成一个隐藏配置文件
@@ -760,6 +762,8 @@ namespace XXSAliyunOSS
                     }
                 }
             }
+            //隐藏文件
+            File.SetAttributes(task.UploadPath + @"\" + task.UploadName + ".upload", FileAttributes.Hidden);
             Console.WriteLine("Tag: " + task.UploadETag.Count);
 
             //在相同上传文件目录生成一个隐藏配置文件
